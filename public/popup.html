@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>请空降设置</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header><h1>请空降</h1><span>视频口播跳转</span></header>
+    <section>
+      <h2>跳转功能</h2>
+      <label class="check"><input id="autoSkip" type="checkbox">自动跳过已确认区间</label>
+      <label class="check"><input id="cacheAnalysis" type="checkbox">缓存广告分析结果到本机</label>
+      <div id="videoStatus" class="status">正在读取当前视频状态…</div>
+      <div class="meta"><span>广告区间</span><div id="ranges">—</div></div>
+      <div class="meta"><span>判定用时</span><strong id="elapsed">—</strong></div>
+      <button id="copyCc" type="button" disabled>复制当前 CC 字幕</button>
+      <p id="copyStatus" class="hint" role="status">包含每条字幕的时间戳和文本。</p>
+    </section>
+    <section>
+      <h2>当前 UP</h2>
+      <div id="currentUp" class="status">正在读取…</div>
+      <button id="toggleCurrentUp" type="button" disabled>加入白名单</button>
+      <p class="hint">名单内 UP 免检测；移出后会重新判断，不读取之前的分析缓存。</p>
+      <details>
+        <summary>查看与管理白名单（<span id="upCount">0</span>）</summary>
+        <ul id="upList"></ul>
+        <div class="add-up"><input id="upMid" type="text" placeholder="UP UID 或空间链接"><input id="upName" type="text" placeholder="备注名称（可选）"></div>
+        <button id="addUp" type="button">添加 UP</button>
+      </details>
+    </section>
+    <form id="settings">
+      <section>
+        <h2>Jev API</h2>
+        <label class="field">Host <input id="jevHost" type="url" placeholder="https://api.typesafe.ai"></label>
+        <label class="field">API Key <input id="jevKey" type="password" autocomplete="off" placeholder="TypeSafe API Key"></label>
+        <label class="field">模型 <input id="jevModel" type="text" placeholder="jev-latest"></label>
+        <label class="field">判定阈值 <input id="jevThreshold" type="number" min="0.5" max="0.99" step="0.01"></label>
+      </section>
+      <section>
+        <h2>LLM 兜底</h2>
+        <label class="check"><input id="llmEnabled" type="checkbox">Jev 失败或不确定时启用</label>
+        <label class="field">接口地址 <input id="llmUrl" type="url" placeholder="https://…/chat/completions"></label>
+        <label class="field">API Key <input id="llmKey" type="password" autocomplete="off" placeholder="可留空"></label>
+        <label class="field">模型 <input id="llmModel" type="text" placeholder="模型名称"></label>
+        <p class="hint">以下单价用于估算 LLM 兜底成本；留 0 时显示未计价。</p>
+        <label class="field">输入单价（美元／百万 token）<input id="llmInputUsdPerMillion" type="number" min="0" step="any" placeholder="0"></label>
+        <label class="field">输出单价（美元／百万 token）<input id="llmOutputUsdPerMillion" type="number" min="0" step="any" placeholder="0"></label>
+      </section>
+      <div class="actions"><button type="submit">保存 API 设置</button><button id="testConnections" type="button">一键测试连接</button></div>
+      <p id="settingsStatus" role="status"></p>
+      <p class="hint">连接测试会向已填写的接口各发送一条短请求。API Key 与缓存只保存在当前浏览器。</p>
+    </form>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
