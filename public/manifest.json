@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "请空降｜视频口播跳转",
   "short_name": "请空降",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "根据 CC 字幕找出视频口播推广区间，在观看时提示或跳过。",
   "icons": { "16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
   "permissions": ["storage"],

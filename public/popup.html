@@ -13,6 +13,8 @@
       <h2>跳转功能</h2>
       <label class="check"><input id="autoSkip" type="checkbox">自动跳过已确认区间</label>
       <label class="check"><input id="cacheAnalysis" type="checkbox">缓存广告分析结果到本机</label>
+      <button id="clearAnalysisCache" type="button">清除全部广告判定缓存</button>
+      <p id="cacheStatus" class="hint" role="status">只清除判定结果；手动区间、白名单和检测历史会保留。</p>
       <div id="videoStatus" class="status">正在读取当前视频状态…</div>
       <div class="meta"><span>广告区间</span><div id="ranges">—</div></div>
       <div class="meta"><span>判定用时</span><strong id="elapsed">—</strong></div>

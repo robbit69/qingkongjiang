@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, formatElapsed, formatTime, normalizeWhitelist, type Segment, type Settings, type Up } from './core';
+import { analysisCacheKeys, DEFAULT_SETTINGS, formatElapsed, formatTime, normalizeWhitelist, type Segment, type Settings, type Up } from './core';
 import type { VideoInfo } from './bilibili';
 import { jevEndpoint } from './analysis';
 
@@ -149,6 +149,24 @@ void refreshState();
 setInterval(() => void refreshState(), 1200);
 
 for (const id of ['autoSkip', 'cacheAnalysis'] as const) input(id).addEventListener('change', () => void saveToggles());
+
+document.getElementById('clearAnalysisCache')!.addEventListener('click', () => {
+  void (async () => {
+    const button = document.getElementById('clearAnalysisCache') as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const stored = await chrome.storage.local.get(null);
+      const keys = analysisCacheKeys(Object.keys(stored));
+      await chrome.storage.local.set({ analysisCacheEpoch: Date.now() });
+      if (keys.length) await chrome.storage.local.remove(keys);
+      element('cacheStatus').textContent = `已清除 ${keys.length} 条广告判定缓存。再次打开视频或点“重新判断”即可检测。`;
+    } catch (error) {
+      element('cacheStatus').textContent = `清除失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      button.disabled = false;
+    }
+  })();
+});
 
 document.getElementById('copyCc')!.addEventListener('click', () => {
   void (async () => {

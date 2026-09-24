@@ -119,6 +119,31 @@ export function segmentKey(segment: Segment): string {
   return `${segment.start.toFixed(2)}:${segment.end.toFixed(2)}`;
 }
 
+export function analysisCacheKeys(keys: string[]): string[] {
+  return keys.filter(key => /^analysis:v\d+:/.test(key));
+}
+
+export function nearestCueIndex(cues: Cue[], time: number, boundary: 'start' | 'end'): number {
+  if (!cues.length) return -1;
+  let nearest = 0;
+  let distance = Infinity;
+  for (let i = 0; i < cues.length; i++) {
+    const candidate = boundary === 'start' ? cues[i].from : cues[i].to;
+    const gap = Math.abs(candidate - time);
+    if (gap < distance) { nearest = i; distance = gap; }
+  }
+  return nearest;
+}
+
+export function moveSegmentBoundary(segment: Segment, cues: Cue[], boundary: 'start' | 'end', direction: -1 | 1): Segment | null {
+  const index = nearestCueIndex(cues, boundary === 'start' ? segment.start : segment.end, boundary);
+  const next = index + direction;
+  if (next < 0 || next >= cues.length) return null;
+  const start = boundary === 'start' ? cues[next].from : segment.start;
+  const end = boundary === 'end' ? cues[next].to : segment.end;
+  return end > start ? { start, end, source: 'manual', confirmed: true } : null;
+}
+
 export function isSeekBackIntoSkipped(segment: Segment, targetTime: number, skipped: ReadonlySet<string>): boolean {
   return skipped.has(segmentKey(segment)) && targetTime >= segment.start && targetTime < segment.end;
 }

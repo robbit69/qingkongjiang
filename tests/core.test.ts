@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cacheKey, captionsAsText, formatElapsed, isAnalysisCacheReusable, isAutoSkippable, isSeekBackIntoSkipped, makeWindows, mergeSegments, normalizeCues, normalizeWhitelist, segmentFromIds, segmentKey, shouldDetectUp } from '../src/core';
+import { analysisCacheKeys, cacheKey, captionsAsText, formatElapsed, isAnalysisCacheReusable, isAutoSkippable, isSeekBackIntoSkipped, makeWindows, mergeSegments, moveSegmentBoundary, nearestCueIndex, normalizeCues, normalizeWhitelist, segmentFromIds, segmentKey, shouldDetectUp } from '../src/core';
 
 describe('字幕与时间区间', () => {
   it('过滤坏字幕并保留时间顺序', () => {
@@ -45,6 +45,25 @@ describe('字幕与时间区间', () => {
     const cues = [{ from: 1, to: 2, content: '原字幕' }];
     expect(cacheKey('BV123', 1, cues)).toMatch(/^analysis:v3:/);
     expect(cacheKey('BV123', 1, cues)).not.toBe(cacheKey('BV123', 1, [{ ...cues[0], content: '改字幕' }]));
+  });
+
+  it('清理时只选广告判定缓存，保留手动区间和检测记录', () => {
+    expect(analysisCacheKeys(['analysis:v2:a', 'analysis:v3:b', 'manual:a', 'detectionHistory', 'settings']))
+      .toEqual(['analysis:v2:a', 'analysis:v3:b']);
+  });
+
+  it('按字幕句调整边界并阻止起点超过终点', () => {
+    const cues = [
+      { from: 1, to: 2, content: '前句' },
+      { from: 2, to: 3, content: '口播开始' },
+      { from: 3, to: 4, content: '口播结束' },
+      { from: 4, to: 5, content: '后句' },
+    ];
+    const segment = { start: 2.1, end: 4, source: 'jev' as const, confidence: 0.9 };
+    expect(nearestCueIndex(cues, 2.1, 'start')).toBe(1);
+    expect(moveSegmentBoundary(segment, cues, 'start', -1)).toEqual({ start: 1, end: 4, source: 'manual', confirmed: true });
+    expect(moveSegmentBoundary(segment, cues, 'end', 1)).toEqual({ start: 2.1, end: 5, source: 'manual', confirmed: true });
+    expect(moveSegmentBoundary({ ...segment, start: 3.5 }, cues, 'end', -1)).toBeNull();
   });
 
   it('UP 名单状态变化后旧分析缓存失效', () => {

@@ -1,10 +1,10 @@
 import type { VideoCaptions, VideoInfo } from './bilibili';
 import type { AnalysisResult, StageResult } from './analysis';
-import { cacheKey, captionsAsText, DEFAULT_SETTINGS, formatElapsed, formatTime, formatUsd, isAnalysisCacheReusable, isAutoSkippable, isSeekBackIntoSkipped, mergeSegments, normalizeWhitelist, segmentKey, shouldDetectUp, summarizeCalls, type Cue, type DetectionRecord, type Segment, type Settings, type Up } from './core';
+import { cacheKey, captionsAsText, DEFAULT_SETTINGS, formatElapsed, formatTime, formatUsd, isAnalysisCacheReusable, isAutoSkippable, isSeekBackIntoSkipped, mergeSegments, moveSegmentBoundary, nearestCueIndex, normalizeWhitelist, segmentKey, shouldDetectUp, summarizeCalls, type Cue, type DetectionRecord, type Segment, type Settings, type Up } from './core';
 import { resolveStages } from './stages';
 
 type VideoContext = VideoInfo & { cues?: Cue[]; track?: string };
-type Cache = { segments: Segment[]; savedAt: number; analysisMs: number };
+type Cache = { segments: Segment[]; savedAt: number; analysisMs: number; epoch?: number };
 type ContextReply = { video?: VideoContext; error?: string };
 type PageState = { video: VideoInfo | null; status: string; statusKind: string; segments: Segment[]; analysisMs: number | null; cacheHit: boolean; track: string; ccCount: number; listed: boolean; settings: Pick<Settings, 'autoSkip' | 'cacheAnalysis'> };
 
@@ -24,6 +24,9 @@ shadow.innerHTML = `<style>
   .controls, .rowactions { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
   .row { border-top: 1px solid #e7eaf0; padding: 8px 0; }
   .rowhead { display: flex; justify-content: space-between; }
+  .cue-preview { margin-top: 7px; padding: 6px 8px; border-radius: 6px; background: #f5f7fc; line-height: 1.45; }
+  .cue-preview summary { cursor: pointer; color: #4f5d75; }
+  .cue-preview p { margin: 5px 0; overflow-wrap: anywhere; }
   .badge { color: #263bdb; }
   .interval { display: flex; align-items: center; gap: 5px; margin-top: 6px; }
   .interval input { width: 68px; padding: 4px; border: 1px solid #cbd1df; border-radius: 5px; }
@@ -69,6 +72,7 @@ let statusText = '正在准备…';
 let key = '';
 let manualKey = '';
 let run = 0;
+let analysisStartedAt = 0;
 let route = '';
 let suppressionRoute = '';
 let video: HTMLVideoElement | null = null;
@@ -81,6 +85,8 @@ let upButton: HTMLButtonElement | null = null;
 let rejudgeButton: HTMLButtonElement | null = null;
 let controlsHideTimer: number | undefined;
 let controlsHovered = false;
+let undoToast: HTMLDivElement | null = null;
+let undoHideTimer: number | undefined;
 const autoSkipped = new Set<string>();
 const suppressed = new Set<string>();
 
@@ -159,11 +165,16 @@ async function saveManual(): Promise<void> {
 
 async function saveAnalysis(): Promise<void> {
   if (!settingsState.cacheAnalysis || !key || analysisMs === null || !current || listed()) return;
+  const runAtSave = run;
+  const startedAt = analysisStartedAt;
   const cacheKeyToWrite = key;
   const ownerMid = current.owner.mid;
-  const stored = await chrome.storage.local.get('upWhitelist');
-  if (key !== cacheKeyToWrite || !shouldDetectUp(ownerMid, normalizeWhitelist(stored.upWhitelist))) return;
-  const cache: Cache = { segments: segments.filter(s => s.source !== 'manual'), savedAt: Date.now(), analysisMs };
+  const segmentsToCache = segments.filter(s => s.source !== 'manual');
+  const analysisMsToCache = analysisMs;
+  const stored = await chrome.storage.local.get(['upWhitelist', 'analysisCacheEpoch']);
+  if (run !== runAtSave || key !== cacheKeyToWrite || startedAt <= (Number(stored.analysisCacheEpoch) || 0) ||
+    !shouldDetectUp(ownerMid, normalizeWhitelist(stored.upWhitelist))) return;
+  const cache: Cache = { segments: segmentsToCache, savedAt: Date.now(), analysisMs: analysisMsToCache, epoch: Number(stored.analysisCacheEpoch) || 0 };
   await chrome.storage.local.set({ [cacheKeyToWrite]: cache });
 }
 
@@ -192,16 +203,51 @@ function renderRows(): void {
     saveButton.onclick = () => {
       const start = Number(first.value), end = Number(last.value);
       if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) { setStatus('error', '区间须满足：开始 ≥ 0，结束 > 开始'); return; }
-      segments[index] = { start, end, source: 'manual', confirmed: true };
-      renderRows(); renderMarkers(); void saveManual(); void saveAnalysis(); setStatus('success', '区间已保存到本机');
+      commitManualSegment(index, { start, end, source: 'manual', confirmed: true }, '区间已保存到本机');
     };
     const jumpButton = document.createElement('button'); jumpButton.textContent = '跳过';
     jumpButton.onclick = () => { if (video) { autoSkipped.add(segmentKey(segment)); video.currentTime = segment.end + 0.1; } };
     const deleteButton = document.createElement('button'); deleteButton.textContent = '删除';
     deleteButton.onclick = () => { segments.splice(index, 1); renderRows(); renderMarkers(); void saveManual(); void saveAnalysis(); };
     actions.append(saveButton, jumpButton, deleteButton);
-    row.append(head, interval, actions); rows.append(row);
+    row.append(head, interval);
+    if (currentCues.length) {
+      const preview = document.createElement('details'); preview.className = 'cue-preview';
+      const summary = document.createElement('summary'); summary.textContent = '查看起止附近的 CC 字幕'; preview.append(summary);
+      for (const boundary of ['start', 'end'] as const) {
+        const cueIndex = nearestCueIndex(currentCues, segment[boundary], boundary);
+        const line = document.createElement('p');
+        const neighbors = currentCues.slice(Math.max(0, cueIndex - 1), Math.min(currentCues.length, cueIndex + 2));
+        line.textContent = `${boundary === 'start' ? '起点' : '终点'}：${neighbors.map(cue => `${cue === currentCues[cueIndex] ? '【' : ''}${cue.content}${cue === currentCues[cueIndex] ? '】' : ''}`).join(' ／ ')}`;
+        preview.append(line);
+      }
+      row.append(preview);
+      const adjust = document.createElement('div'); adjust.className = 'rowactions';
+      for (const boundary of ['start', 'end'] as const) {
+        for (const direction of [-1, 1] as const) {
+          const button = document.createElement('button'); button.type = 'button';
+          button.textContent = `${boundary === 'start' ? '起点' : '终点'}${direction < 0 ? '前一句' : '后一句'}`;
+          const cueIndex = nearestCueIndex(currentCues, segment[boundary], boundary);
+          button.disabled = cueIndex + direction < 0 || cueIndex + direction >= currentCues.length;
+          button.onclick = () => {
+            const adjusted = moveSegmentBoundary(segments[index], currentCues, boundary, direction);
+            if (!adjusted) { setStatus('error', '无法再移动该边界，或起点会超过终点'); return; }
+            commitManualSegment(index, adjusted);
+          };
+          adjust.append(button);
+        }
+      }
+      row.append(adjust);
+    }
+    row.append(actions); rows.append(row);
   });
+}
+
+function commitManualSegment(index: number, segment: Segment, message = '已按 CC 字幕时间戳保存区间'): void {
+  segments[index] = segment;
+  renderRows(); renderMarkers();
+  void saveManual(); void saveAnalysis();
+  setStatus('success', message);
 }
 
 function renderMarkers(): void {
@@ -236,6 +282,46 @@ function renderPlayerControls(): void {
   upButton.disabled = !current?.owner.mid;
   rejudgeButton.disabled = !current || isListed;
   rejudgeButton.title = isListed ? '先将当前 UP 移出白名单' : '忽略本地缓存，重新调用 Jev 判断';
+}
+
+function dismissUndoToast(): void {
+  window.clearTimeout(undoHideTimer);
+  undoToast?.remove();
+  undoToast = null;
+}
+
+function showUndoToast(segment: Segment): void {
+  dismissUndoToast();
+  const host = controlHost ?? video?.parentElement;
+  if (!host || !video) return;
+  if (getComputedStyle(host).position === 'static') (host as HTMLElement).style.position = 'relative';
+  const skippedVideo = video;
+  const skippedRoute = route;
+  const start = segment.start;
+  const id = segmentKey(segment);
+  const toast = document.createElement('div');
+  toast.className = 'qkj-undo-toast';
+  toast.setAttribute('role', 'status');
+  toast.style.cssText = 'position:absolute;top:55px;right:16px;z-index:80;display:flex;align-items:center;gap:8px;max-width:calc(100% - 32px);padding:7px 9px;border-radius:8px;background:#20242ae8;color:white;font:600 12px system-ui,sans-serif;box-shadow:0 4px 14px #0005;';
+  const label = document.createElement('span');
+  label.textContent = `已跳过 ${formatTime(segment.start)}–${formatTime(segment.end)}`;
+  const button = document.createElement('button');
+  button.type = 'button'; button.textContent = '撤销';
+  button.style.cssText = 'border:1px solid #ffffffaa;border-radius:6px;background:white;color:#202228;padding:4px 7px;font:700 12px system-ui,sans-serif;cursor:pointer;';
+  toast.addEventListener('pointerdown', event => event.stopPropagation());
+  toast.addEventListener('click', event => event.stopPropagation());
+  button.onclick = () => {
+    if (video === skippedVideo && route === skippedRoute) {
+      suppressed.add(id);
+      video.currentTime = start;
+      setStatus('success', `已回到 ${formatTime(start)}，本次观看不会再跳过该区间。`);
+    }
+    dismissUndoToast();
+  };
+  toast.append(label, button);
+  host.append(toast);
+  undoToast = toast;
+  undoHideTimer = window.setTimeout(dismissUndoToast, 6500);
 }
 
 function hidePlayerControls(): void {
@@ -315,6 +401,7 @@ function onTimeUpdate(): void {
   autoSkipped.add(id);
   video.currentTime = segment.end + 0.1;
   setStatus('success', `已自动跳过 ${formatTime(segment.start)}–${formatTime(segment.end)}。手动拖回后本次不再跳过该区间。`);
+  showUndoToast(segment);
 }
 
 function attachVideo(): void {
@@ -323,6 +410,7 @@ function attachVideo(): void {
   video?.removeEventListener('timeupdate', onTimeUpdate);
   video?.removeEventListener('seeking', onSeeking);
   video?.removeEventListener('loadedmetadata', renderMarkers);
+  dismissUndoToast();
   video = next;
   video?.addEventListener('timeupdate', onTimeUpdate);
   video?.addEventListener('seeking', onSeeking);
@@ -366,7 +454,9 @@ async function analyze(captions: VideoCaptions, token: number): Promise<void> {
 
 async function openVideo(force = false): Promise<void> {
   const id = videoId(); if (!id) return;
+  dismissUndoToast();
   const token = ++run;
+  analysisStartedAt = Date.now();
   const nextRoute = `${id.bvid}:${id.page}`;
   if (nextRoute !== suppressionRoute) { autoSkipped.clear(); suppressed.clear(); suppressionRoute = nextRoute; }
   current = null; currentCues = []; track = ''; key = ''; manualKey = `manual:${id.bvid}:${id.page}`;
@@ -395,10 +485,11 @@ async function openVideo(force = false): Promise<void> {
     if (!force && settingsState.cacheAnalysis) {
       const cacheStart = performance.now();
       const epochKey = `upCacheEpoch:${current.owner.mid}`;
-      const stored = await chrome.storage.local.get([key, epochKey]);
+      const stored = await chrome.storage.local.get([key, epochKey, 'analysisCacheEpoch']);
       const cache = stored[key] as Cache | undefined;
       if (token !== run) return;
-      if (cache && isAnalysisCacheReusable(cache.savedAt, Number(stored[epochKey]) || 0, Date.now())) {
+      const invalidatedAt = Math.max(Number(stored[epochKey]) || 0, Number(stored.analysisCacheEpoch) || 0);
+      if (cache && (cache.epoch ?? 0) === (Number(stored.analysisCacheEpoch) || 0) && isAnalysisCacheReusable(cache.savedAt, invalidatedAt, Date.now())) {
         segments = mergeSegments([...segments, ...cache.segments]);
         analysisMs = cache.analysisMs; cacheHit = true;
         renderRows(); renderMarkers();
@@ -447,7 +538,7 @@ function tick(): void {
   attachVideo(); attachPlayerControls(); renderMarkers();
   const id = videoId(); const next = id ? `${id.bvid}:${id.page}` : '';
   root.style.display = id ? '' : 'none';
-  if (!id && route) { run++; route = ''; suppressionRoute = ''; current = null; currentCues = []; segments = []; autoSkipped.clear(); suppressed.clear(); controlHost?.removeEventListener('mousemove', showPlayerControls); controlHost?.removeEventListener('mouseleave', onPlayerLeave); controlBox?.remove(); markerLayer?.remove(); controlHost = null; progressWrap = null; return; }
+  if (!id && route) { run++; route = ''; suppressionRoute = ''; current = null; currentCues = []; segments = []; autoSkipped.clear(); suppressed.clear(); dismissUndoToast(); controlHost?.removeEventListener('mousemove', showPlayerControls); controlHost?.removeEventListener('mouseleave', onPlayerLeave); controlBox?.remove(); markerLayer?.remove(); controlHost = null; progressWrap = null; return; }
   if (id && route !== next) { route = next; void openVideo(); }
 }
 tick();
