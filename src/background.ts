@@ -1,17 +1,10 @@
-import { analyzeStage, refineBoundaries, testConnections } from './analysis';
+import { analyzeStage, refineBoundaries } from './analysis';
 import { getVideoCaptions, getVideoInfo } from './bilibili';
 import { DEFAULT_SETTINGS, type Settings, type Window } from './core';
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
   const type = (message as { type?: string }).type;
-  if (type === 'TEST_CONNECTIONS') {
-    if (!sender.url?.startsWith(`chrome-extension://${chrome.runtime.id}/`)) return false;
-    const provided = (message as { settings?: Partial<Settings> }).settings;
-    const settings: Settings = { ...DEFAULT_SETTINGS, ...(provided ?? {}) };
-    void testConnections(settings).then(sendResponse).catch(error => sendResponse({ error: String(error) }));
-    return true;
-  }
   if (type !== 'ANALYZE_STAGE' && type !== 'REFINE_BOUNDARIES' && type !== 'GET_CAPTIONS' && type !== 'GET_VIDEO_CONTEXT') return false;
   const senderUrl = sender.url ? new URL(sender.url) : null;
   if (senderUrl?.hostname !== 'www.bilibili.com') {

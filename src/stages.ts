@@ -1,7 +1,7 @@
 import type { AnalysisResult, StageDecision, StageResult } from './analysis';
 import { makeWindows, mergeSegments, segmentFromIds, type ApiCall, type Cue, type Line, type Segment, type Window } from './core';
 
-type Pending = { startId: string; probability: number; startScore: number; needsRefine: boolean; seam: boolean };
+type Pending = { startId: string; probability: number; startScore: number; needsRefine: boolean; seam: boolean; seamEdgeScore: number };
 type Candidate = Pending & { endId: string; endScore: number };
 export type StageSummary = { segments: Segment[]; warnings: string[]; calls: ApiCall[]; stageCount: number };
 
@@ -90,13 +90,18 @@ export async function resolveStages(
         startScore: beginsWithAd ? decision.firstLineProbability : decision.start.probability,
         needsRefine: edgeUnclear || (!beginsWithAd && (decision.start.probability < 0.6 || decision.start.margin < 0.15)),
         seam: false,
+        seamEdgeScore: endsWithAd ? decision.lastLineProbability : 1,
       };
     } else {
       pending.probability = Math.min(pending.probability, decision.probability);
       pending.seam = true;
+      pending.seamEdgeScore = Math.min(pending.seamEdgeScore, decision.firstLineProbability);
       pending.needsRefine ||= edgeUnclear;
     }
-    if (endsWithAd) continue;
+    if (endsWithAd) {
+      pending.seamEdgeScore = Math.min(pending.seamEdgeScore, decision.lastLineProbability);
+      continue;
+    }
     const endId = decision.end.id;
     if (endId === 'NO_END' || !item.window.lines.some(line => line.id === endId)) {
       warnings.push('Jev 未给出有效的口播终点');
@@ -116,7 +121,8 @@ export async function resolveStages(
     const original = segmentFromIds(lines, candidate.startId, candidate.endId, 'jev', candidate.probability);
     if (!original) { warnings.push('Jev 给出的口播起止顺序无效'); continue; }
     original.boundaryConfidence = Math.min(candidate.startScore, candidate.endScore);
-    if (candidate.needsRefine || candidate.seam) {
+    const uncertainSeam = candidate.seam && Math.min(candidate.startScore, candidate.endScore, candidate.seamEdgeScore) < 0.9;
+    if (candidate.needsRefine || uncertainSeam) {
       const reply = await refine(boundaryContext(lines, candidate.startId, candidate.endId));
       calls.push(...(reply.calls ?? []));
       const refined = reply.segments[0];

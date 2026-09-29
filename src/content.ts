@@ -2,6 +2,7 @@ import type { VideoCaptions, VideoInfo } from './bilibili';
 import type { AnalysisResult, StageResult } from './analysis';
 import { cacheKey, captionsAsText, DEFAULT_SETTINGS, formatElapsed, formatTime, formatUsd, isAnalysisCacheReusable, isAutoSkippable, isSeekBackIntoSkipped, mergeSegments, moveSegmentBoundary, nearestCueIndex, normalizeWhitelist, segmentKey, shouldDetectUp, summarizeCalls, type Cue, type DetectionRecord, type Segment, type Settings, type Up } from './core';
 import { resolveStages } from './stages';
+import { copyTextToClipboard } from './clipboard';
 
 type VideoContext = VideoInfo & { cues?: Cue[]; track?: string };
 type Cache = { segments: Segment[]; savedAt: number; analysisMs: number; epoch?: number };
@@ -46,7 +47,7 @@ shadow.innerHTML = `<style>
   <div class="controls"><button class="refresh" type="button">重新分析</button><button class="add" type="button">添加手动区间</button></div>
   <div class="rows"></div>
   <div class="history"><h3>历次检测</h3><div class="history-list"><span class="sub">暂无检测记录</span></div><div class="sub">Jev 成本按 TypeSafe 公布的输入单价估算；LLM 按设置的单价估算。</div></div>
-  <div class="sub">下面可直接修改扩展设置、白名单和 API，并测试连接。</div>
+  <div class="sub">下面可直接修改扩展设置、白名单和 API。</div>
   <iframe title="请空降设置" loading="lazy"></iframe>
 </section>`;
 document.documentElement.append(root);
@@ -83,6 +84,7 @@ let controlBox: HTMLDivElement | null = null;
 let autoButton: HTMLButtonElement | null = null;
 let upButton: HTMLButtonElement | null = null;
 let rejudgeButton: HTMLButtonElement | null = null;
+let copyCcButton: HTMLButtonElement | null = null;
 let controlsHideTimer: number | undefined;
 let controlsHovered = false;
 let undoToast: HTMLDivElement | null = null;
@@ -273,7 +275,7 @@ function renderMarkers(): void {
 }
 
 function renderPlayerControls(): void {
-  if (!autoButton || !upButton || !rejudgeButton) return;
+  if (!autoButton || !upButton || !rejudgeButton || !copyCcButton) return;
   autoButton.textContent = `自动跳过：${settingsState.autoSkip ? '开' : '关'}`;
   autoButton.setAttribute('aria-pressed', String(settingsState.autoSkip));
   const isListed = listed();
@@ -282,6 +284,9 @@ function renderPlayerControls(): void {
   upButton.disabled = !current?.owner.mid;
   rejudgeButton.disabled = !current || isListed;
   rejudgeButton.title = isListed ? '先将当前 UP 移出白名单' : '忽略本地缓存，重新调用 Jev 判断';
+  copyCcButton.disabled = !currentCues.length;
+  copyCcButton.title = currentCues.length ? `复制当前 ${currentCues.length} 条 CC 字幕及时间戳` : '当前没有可用 CC 字幕';
+  copyCcButton.textContent = '复制 CC';
 }
 
 function dismissUndoToast(): void {
@@ -302,7 +307,8 @@ function showUndoToast(segment: Segment): void {
   const toast = document.createElement('div');
   toast.className = 'qkj-undo-toast';
   toast.setAttribute('role', 'status');
-  toast.style.cssText = 'position:absolute;top:55px;right:16px;z-index:80;display:flex;align-items:center;gap:8px;max-width:calc(100% - 32px);padding:7px 9px;border-radius:8px;background:#20242ae8;color:white;font:600 12px system-ui,sans-serif;box-shadow:0 4px 14px #0005;';
+  const top = 24 + Math.ceil(controlBox?.getBoundingClientRect().height || 31);
+  toast.style.cssText = `position:absolute;top:${top}px;right:16px;z-index:80;display:flex;align-items:center;gap:8px;max-width:calc(100% - 32px);padding:7px 9px;border-radius:8px;background:#20242ae8;color:white;font:600 12px system-ui,sans-serif;box-shadow:0 4px 14px #0005;`;
   const label = document.createElement('span');
   label.textContent = `已跳过 ${formatTime(segment.start)}–${formatTime(segment.end)}`;
   const button = document.createElement('button');
@@ -350,11 +356,11 @@ function attachPlayerControls(): void {
   controlHost?.removeEventListener('mousemove', showPlayerControls);
   controlHost?.removeEventListener('mouseleave', onPlayerLeave);
   window.clearTimeout(controlsHideTimer);
-  controlBox?.remove(); controlBox = null; autoButton = null; upButton = null; rejudgeButton = null; controlHost = host;
+  controlBox?.remove(); controlBox = null; autoButton = null; upButton = null; rejudgeButton = null; copyCcButton = null; controlHost = host;
   if (!host) return;
   if (getComputedStyle(host).position === 'static') (host as HTMLElement).style.position = 'relative';
   const box = document.createElement('div'); box.className = 'qkj-player-switches';
-  box.style.cssText = 'position:absolute;right:16px;top:16px;display:flex;gap:6px;z-index:70;opacity:0;pointer-events:none;transition:opacity .18s ease;';
+  box.style.cssText = 'position:absolute;right:16px;top:16px;display:flex;flex-wrap:wrap;justify-content:flex-end;max-width:calc(100% - 32px);gap:6px;z-index:70;opacity:0;pointer-events:none;transition:opacity .18s ease;';
   box.addEventListener('mouseenter', () => { controlsHovered = true; showPlayerControls(); });
   box.addEventListener('mouseleave', () => { controlsHovered = false; showPlayerControls(); });
   box.addEventListener('pointerdown', event => event.stopPropagation());
@@ -364,7 +370,7 @@ function attachPlayerControls(): void {
     button.style.cssText = 'border:1px solid #ffffffaa;border-radius:16px;background:#20242acc;color:white;padding:6px 9px;font:600 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;';
     return button;
   };
-  autoButton = makeButton(); upButton = makeButton(); rejudgeButton = makeButton();
+  autoButton = makeButton(); upButton = makeButton(); rejudgeButton = makeButton(); copyCcButton = makeButton();
   rejudgeButton.textContent = '重新判断';
   autoButton.onclick = () => {
     settingsState.autoSkip = !settingsState.autoSkip; renderPlayerControls();
@@ -377,7 +383,21 @@ function attachPlayerControls(): void {
     void chrome.storage.local.set({ upWhitelist: normalizeWhitelist(next) });
   };
   rejudgeButton.onclick = () => void openVideo(true);
-  box.append(autoButton, upButton, rejudgeButton); host.append(box); controlBox = box;
+  copyCcButton.onclick = () => {
+    if (!currentCues.length) return;
+    const cuesToCopy = currentCues;
+    const button = copyCcButton;
+    void copyTextToClipboard(captionsAsText(cuesToCopy)).then(() => {
+      setStatus('success', `已复制 ${cuesToCopy.length} 条 CC 字幕及时间戳。`);
+      if (button && button === copyCcButton) button.textContent = `已复制 ${cuesToCopy.length} 条`;
+    }).catch(error => {
+      setStatus('error', `复制字幕失败：${error instanceof Error ? error.message : String(error)}`);
+      if (button && button === copyCcButton) button.textContent = '复制失败';
+    }).finally(() => {
+      window.setTimeout(() => { if (button && button === copyCcButton) renderPlayerControls(); }, 2600);
+    });
+  };
+  box.append(autoButton, upButton, copyCcButton, rejudgeButton); host.append(box); controlBox = box;
   host.addEventListener('mousemove', showPlayerControls);
   host.addEventListener('mouseleave', onPlayerLeave);
   renderPlayerControls();

@@ -25,14 +25,27 @@ describe('字幕阶段拼接', () => {
 
   it('阶段交界处的连续口播合并，并只补问一对边界', async () => {
     const analyze = vi.fn(async (window: Window) => {
-      if (window.index === 0) return reply(decision(250, 253, { lastLineProbability: 0.94, end: { id: 'NO_END', probability: 0.92, margin: 0.8 } }));
-      if (window.index === 1) return reply(decision(254, 260, { firstLineProbability: 0.95, start: { id: 'NO_START', probability: 0.9, margin: 0.8 } }));
+      if (window.index === 0) return reply(decision(250, 253, { lastLineProbability: 0.94, start: choice(250, 0.68), end: { id: 'NO_END', probability: 0.92, margin: 0.8 } }));
+      if (window.index === 1) return reply(decision(254, 260, { firstLineProbability: 0.95, start: { id: 'NO_START', probability: 0.9, margin: 0.8 }, end: choice(260, 0.88) }));
       return reply();
     });
     const refine = vi.fn(async () => ({ segments: [{ start: 500, end: 521.5, source: 'jev' as const, boundaryConfidence: 0.72 }], calls: [] }));
     const result = await resolveStages(cues, analyze, refine);
     expect(refine).toHaveBeenCalledTimes(1);
     expect(result.segments).toEqual([{ start: 500, end: 521.5, source: 'jev', confidence: 0.98, boundaryConfidence: 0.72 }]);
+  });
+
+  it('跨阶段拼接的起止与边缘都很稳时不额外补问', async () => {
+    const analyze = vi.fn(async (window: Window) => {
+      if (window.index === 0) return reply(decision(250, 253, { lastLineProbability: 0.95, start: choice(250, 0.95), end: { id: 'NO_END', probability: 0.95, margin: 0.8 } }));
+      if (window.index === 1) return reply(decision(254, 260, { firstLineProbability: 0.95, start: { id: 'NO_START', probability: 0.95, margin: 0.8 }, end: choice(260, 0.95) }));
+      return reply();
+    });
+    const refine = vi.fn(async () => ({ segments: [], calls: [] }));
+    const result = await resolveStages(cues, analyze, refine);
+    expect(analyze).toHaveBeenCalledTimes(3);
+    expect(refine).not.toHaveBeenCalled();
+    expect(result.segments).toEqual([{ start: 500, end: 521.5, source: 'jev', confidence: 0.98, boundaryConfidence: 0.95 }]);
   });
 
   it('边界概率较低时补问；补问失败则保留待核对区间', async () => {

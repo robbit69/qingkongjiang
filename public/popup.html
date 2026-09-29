@@ -51,9 +51,9 @@
         <label class="field">输入单价（美元／百万 token）<input id="llmInputUsdPerMillion" type="number" min="0" step="any" placeholder="0"></label>
         <label class="field">输出单价（美元／百万 token）<input id="llmOutputUsdPerMillion" type="number" min="0" step="any" placeholder="0"></label>
       </section>
-      <div class="actions"><button type="submit">保存 API 设置</button><button id="testConnections" type="button">一键测试连接</button></div>
+      <div class="actions"><button type="submit">保存 API 设置</button></div>
       <p id="settingsStatus" role="status"></p>
-      <p class="hint">连接测试会向已填写的接口各发送一条短请求。API Key 与缓存只保存在当前浏览器。</p>
+      <p class="hint">保存设置不会向接口发送测试请求。API Key 与缓存只保存在当前浏览器。</p>
     </form>
   </main>
   <script src="popup.js"></script>

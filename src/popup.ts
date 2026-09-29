@@ -1,9 +1,9 @@
 import { analysisCacheKeys, DEFAULT_SETTINGS, formatElapsed, formatTime, normalizeWhitelist, type Segment, type Settings, type Up } from './core';
 import type { VideoInfo } from './bilibili';
 import { jevEndpoint } from './analysis';
+import { copyTextToClipboard } from './clipboard';
 
 type PageState = { video: VideoInfo | null; status: string; statusKind: string; segments: Segment[]; analysisMs: number | null; cacheHit: boolean; track: string; ccCount: number; listed: boolean; settings: Pick<Settings, 'autoSkip' | 'cacheAnalysis'> };
-type TestResult = { jev: { ok: boolean; message: string; elapsedMs: number }; llm?: { ok: boolean; message: string; elapsedMs: number }; error?: string };
 
 const input = (id: string) => document.getElementById(id) as HTMLInputElement;
 const element = (id: string) => document.getElementById(id) as HTMLElement;
@@ -174,16 +174,7 @@ document.getElementById('copyCc')!.addEventListener('click', () => {
     if (!tab?.id) throw new Error('未找到当前视频标签页');
     const result = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CC_TEXT' }) as { text?: string; count?: number; error?: string };
     if (!result.text) throw new Error(result.error || '当前视频没有可用 CC 字幕');
-    try {
-      await navigator.clipboard.writeText(result.text);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = result.text;
-      textarea.style.cssText = 'position:fixed;left:-10000px;top:0';
-      document.body.append(textarea); textarea.select();
-      const copied = document.execCommand('copy'); textarea.remove();
-      if (!copied) throw new Error('浏览器未允许复制到剪贴板');
-    }
+    await copyTextToClipboard(result.text);
     element('copyStatus').textContent = `已复制 ${result.count ?? current?.ccCount ?? 0} 条 CC 字幕（含时间戳）。`;
   })().catch(error => { element('copyStatus').textContent = error instanceof Error ? error.message : String(error); });
 });
@@ -212,19 +203,6 @@ document.getElementById('settings')!.addEventListener('submit', event => {
     await chrome.storage.local.set({ settings: next });
     settings = next;
     showMessage('API 设置已保存到本机', true);
-  })().catch(error => showMessage(error instanceof Error ? error.message : String(error)));
-});
-
-document.getElementById('testConnections')!.addEventListener('click', () => {
-  void (async () => {
-    const next = readSettings();
-    await ensureApiPermissions(next);
-    showMessage('正在测试连接…');
-    const result = await chrome.runtime.sendMessage({ type: 'TEST_CONNECTIONS', settings: next }) as TestResult;
-    if (result.error) throw new Error(result.error);
-    const lines = [`Jev：${result.jev.ok ? '成功' : '失败'} · ${formatElapsed(result.jev.elapsedMs)}${result.jev.ok ? '' : ` · ${result.jev.message}`}`];
-    if (result.llm) lines.push(`LLM：${result.llm.ok ? '成功' : '失败'} · ${formatElapsed(result.llm.elapsedMs)}${result.llm.ok ? '' : ` · ${result.llm.message}`}`);
-    showMessage(lines.join('\n'), result.jev.ok && (!result.llm || result.llm.ok));
   })().catch(error => showMessage(error instanceof Error ? error.message : String(error)));
 });
 
