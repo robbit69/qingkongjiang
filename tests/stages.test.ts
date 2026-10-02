@@ -70,4 +70,23 @@ describe('字幕阶段拼接', () => {
     expect(result.segments).toHaveLength(2);
     expect(result.stageCount).toBe(3);
   });
+
+  it('后台无响应时记录原因并停止后续付费阶段请求', async () => {
+    const analyze = vi.fn(async (): Promise<StageResult | undefined> => undefined);
+    const refine = vi.fn(async () => ({ segments: [], calls: [] }));
+    const result = await resolveStages(cues, analyze, refine);
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(refine).not.toHaveBeenCalled();
+    expect(result.stageCount).toBe(1);
+    expect(result.warnings.join(' ')).toContain('没有收到扩展后台的结果');
+    expect(result.segments).toEqual([]);
+  });
+
+  it('边界补问无响应时保留待核对区间，不自动跳过', async () => {
+    const analyze = async () => reply(decision(61, 80, { end: choice(80, 0.56, 0.21) }));
+    const result = await resolveStages(cues.slice(0, 100), analyze, async () => undefined);
+    expect(result.warnings.join(' ')).toContain('没有返回边界结果');
+    expect(result.segments[0].boundaryConfidence).toBe(0);
+    expect(isAutoSkippable(result.segments[0], 0.8)).toBe(false);
+  });
 });

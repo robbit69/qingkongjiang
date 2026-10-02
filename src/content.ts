@@ -98,14 +98,21 @@ function renderHistory(history: DetectionRecord[]): void {
   for (const record of history.slice(0, 50)) {
     const details = document.createElement('details');
     const summary = document.createElement('summary');
-    const total = summarizeCalls(record.calls);
-    const cost = total.missingCost ? `已知 ${formatUsd(total.costUsd)}，部分未计价` : formatUsd(total.costUsd);
+    const recordedCalls = Array.isArray(record.calls) ? record.calls : [];
+    const total = summarizeCalls(recordedCalls);
+    const cost = !recordedCalls.length && record.status !== 'success' ? '用量未知'
+      : total.missingCost ? `已知 ${formatUsd(total.costUsd)}，部分未计价` : formatUsd(total.costUsd);
     summary.textContent = `${new Date(record.at).toLocaleString('zh-CN')} · ${record.title || record.bvid} · ${formatElapsed(record.elapsedMs)} · ${cost}`;
     details.append(summary);
     const meta = document.createElement('p');
-    meta.textContent = `${record.status === 'success' ? '完成' : record.status === 'partial' ? '部分失败' : '中断'} · ${record.cueCount} 条字幕 / ${record.windowCount} 阶段 / ${record.segmentCount} 个区间 · ${total.attempts} 次请求 · ${total.missingUsage ? '已知 ' : ''}输入 ${total.inputTokens} / 输出 ${total.outputTokens} token${total.missingUsage ? '（部分接口未返回用量）' : ''}`;
+    meta.textContent = `${record.status === 'success' ? '完成' : record.status === 'partial' ? '部分失败' : '中断'} · ${record.cueCount} 条字幕 / ${record.windowCount} 阶段 / ${record.segmentCount} 个区间 · ${recordedCalls.length ? `${total.attempts} 次请求 · ${total.missingUsage ? '已知 ' : ''}输入 ${total.inputTokens} / 输出 ${total.outputTokens} token${total.missingUsage ? '（部分接口未返回用量）' : ''}` : '接口用量未返回'}`;
     details.append(meta);
-    record.calls.forEach((call, index) => {
+    if (record.warning) {
+      const warning = document.createElement('p');
+      warning.textContent = `原因：${record.warning}`;
+      details.append(warning);
+    }
+    recordedCalls.forEach((call, index) => {
       const line = document.createElement('p');
       line.textContent = `#${index + 1} ${call.provider.toUpperCase()} ${call.model} · ${formatElapsed(call.elapsedMs)} · 输入 ${call.inputTokens ?? '未知'} / 输出 ${call.outputTokens ?? '未知'} token · ${call.costUsd === null ? '成本未知' : formatUsd(call.costUsd)}${call.failed ? ' · 请求失败' : ''}${call.attempts > 1 ? ` · 重试 ${call.attempts - 1} 次` : ''}`;
       details.append(line);
@@ -456,12 +463,13 @@ async function analyze(captions: VideoCaptions, token: number): Promise<void> {
   }
   if (token !== run) return;
   const { segments: found, warnings, calls, stageCount } = summary;
-  if (calls.length) void addDetectionRecord({
+  if (stageCount) void addDetectionRecord({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     at: Date.now(), bvid: captions.bvid, title: captions.title,
     cueCount: captions.cues.length, windowCount: stageCount,
     elapsedMs: performance.now() - start, segmentCount: found.length,
     status: warnings.some(w => !w.includes('已用 LLM 兜底')) ? 'partial' : 'success', calls,
+    warning: warnings.filter(w => !w.includes('已用 LLM 兜底')).slice(0, 2).join('；') || undefined,
   }).catch(() => { /* Recording must not interrupt video playback. */ });
   analysisMs = performance.now() - start;
   segments = mergeSegments([...segments.filter(s => s.source === 'manual'), ...found]);

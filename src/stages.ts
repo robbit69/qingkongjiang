@@ -20,8 +20,8 @@ function boundaryContext(lines: Line[], startId: string, endId: string): Window 
 
 export async function resolveStages(
   cues: Cue[],
-  analyze: (window: Window) => Promise<StageResult>,
-  refine: (window: Window) => Promise<AnalysisResult>,
+  analyze: (window: Window) => Promise<StageResult | undefined>,
+  refine: (window: Window) => Promise<AnalysisResult | undefined>,
   isCurrent: () => boolean = () => true,
   onProgress: (done: number, total: number) => void = () => {},
 ): Promise<StageSummary> {
@@ -32,20 +32,43 @@ export async function resolveStages(
   const warnings: string[] = [];
   let stageCount = 0;
   let total = initial.length;
+  let transportFailed = false;
 
   const inspect = async (window: Window, depth: number): Promise<void> => {
     if (!isCurrent()) throw new Error('分析已中断');
-    const reply = await analyze(window);
+    let reply: StageResult | undefined;
+    try {
+      reply = await analyze(window);
+    } catch (error) {
+      warnings.push(`第 ${stageCount + 1} 阶段通信失败：${error instanceof Error ? error.message : String(error)}`);
+      transportFailed = true;
+    }
     stageCount++;
-    calls.push(...(reply.calls ?? []));
     onProgress(stageCount, total);
     if (!isCurrent()) throw new Error('分析已中断');
+    if (!reply || typeof reply !== 'object') {
+      if (!transportFailed) warnings.push(`第 ${stageCount} 阶段没有收到扩展后台的结果；请刷新视频页后重试`);
+      transportFailed = true;
+      return;
+    }
+    if ('error' in reply && typeof reply.error === 'string') {
+      warnings.push(`第 ${stageCount} 阶段：${reply.error}`);
+      transportFailed = true;
+      return;
+    }
+    if (!Array.isArray(reply.segments)) {
+      warnings.push(`第 ${stageCount} 阶段返回格式无效；请刷新视频页后重试`);
+      transportFailed = true;
+      return;
+    }
+    calls.push(...(Array.isArray(reply.calls) ? reply.calls : []));
+    if (reply.warning && /HTTP 401|HTTP 403|API Key/.test(reply.warning)) transportFailed = true;
     if (reply.decision?.multipleProbability !== undefined && reply.decision.multipleProbability >= 0.65) {
       if (window.lines.length > 24 && depth < 5 && stageCount < 10) {
         const middle = Math.floor(window.lines.length / 2);
         total += 2;
         await inspect({ lines: window.lines.slice(0, middle), index: window.index }, depth + 1);
-        await inspect({ lines: window.lines.slice(middle), index: window.index }, depth + 1);
+        if (!transportFailed) await inspect({ lines: window.lines.slice(middle), index: window.index }, depth + 1);
         return;
       }
       warnings.push('同一小段内可能有多段独立口播，无法可靠确定全部边界；请手动核对');
@@ -55,7 +78,10 @@ export async function resolveStages(
     resolved.push({ window, decision: reply.decision, segments: reply.segments ?? [], warning: reply.warning });
     if (reply.warning) warnings.push(reply.warning);
   };
-  for (const window of initial) await inspect(window, 0);
+  for (const window of initial) {
+    if (transportFailed) break;
+    await inspect(window, 0);
+  }
 
   let pending: Pending | null = null;
   const candidates: Candidate[] = [];
@@ -123,8 +149,16 @@ export async function resolveStages(
     original.boundaryConfidence = Math.min(candidate.startScore, candidate.endScore);
     const uncertainSeam = candidate.seam && Math.min(candidate.startScore, candidate.endScore, candidate.seamEdgeScore) < 0.9;
     if (candidate.needsRefine || uncertainSeam) {
-      const reply = await refine(boundaryContext(lines, candidate.startId, candidate.endId));
-      calls.push(...(reply.calls ?? []));
+      let reply: AnalysisResult | undefined;
+      try {
+        reply = await refine(boundaryContext(lines, candidate.startId, candidate.endId));
+      } catch (error) {
+        reply = { segments: [], warning: `扩展后台通信失败：${error instanceof Error ? error.message : String(error)}` };
+      }
+      if (!reply || typeof reply !== 'object' || !Array.isArray(reply.segments)) {
+        reply = { segments: [], warning: '扩展后台没有返回边界结果；请刷新视频页后重试' };
+      }
+      calls.push(...(Array.isArray(reply.calls) ? reply.calls : []));
       const refined = reply.segments[0];
       const refinedStart = refined ? lines.findIndex(line => line.from === refined.start) : -1;
       const refinedEnd = refined ? lines.findIndex(line => line.to === refined.end) : -1;

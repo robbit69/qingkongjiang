@@ -60,6 +60,7 @@ export type DetectionRecord = {
   segmentCount: number;
   status: 'success' | 'partial' | 'interrupted';
   calls: ApiCall[];
+  warning?: string;
 };
 
 export type CallSummary = { inputTokens: number; outputTokens: number; costUsd: number; missingUsage: boolean; missingCost: boolean; attempts: number };
